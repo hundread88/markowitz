@@ -1,10 +1,25 @@
+import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { mean, multiply, transpose, inv, ones, squeeze, subtract } from 'mathjs';
 
 dotenv.config();
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const TOKEN = process.env.TELEGRAM_TOKEN;
+const HOST_URL = process.env.HOST_URL;
+const WEBHOOK_PATH = `/webhook/${TOKEN}`;
+const bot = new TelegramBot(TOKEN, { webHook: { port: PORT } });
+
+app.use(express.json());
+app.post(WEBHOOK_PATH, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+bot.setWebHook(`${HOST_URL}${WEBHOOK_PATH}`);
 
 async function fetchPrices(coinIds, days = 30) {
   const prices = {};
@@ -75,4 +90,10 @@ bot.on('message', async msg => {
   } catch (err) {
     bot.sendMessage(chatId, `Ошибка при расчёте: ${err.message}`);
   }
+});
+
+app.get('/', (_, res) => res.send('Bot is running.'));
+
+app.listen(PORT, () => {
+  console.log(`Express server running on port ${PORT}`);
 });
