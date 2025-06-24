@@ -28,9 +28,12 @@ app.post(WEBHOOK_PATH, (req, res) => {
   res.sendStatus(200);
 });
 
+// Вспомогательная функция для создания паузы
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 async function fetchPrices(coinIds, days = 30) {
   const prices = {};
-  for (let id of coinIds) {
+  for (const id of coinIds) {
     try {
       const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}`;
       const { data } = await axios.get(url);
@@ -38,7 +41,18 @@ async function fetchPrices(coinIds, days = 30) {
           throw new Error(`Нет данных о ценах для ${id}`);
       }
       prices[id] = data.prices.map(p => p[1]);
+      
+      // --- ИЗМЕНЕНИЕ ---
+      // Добавляем паузу в 1.2 секунды после каждого успешного запроса, чтобы не превышать лимиты API
+      await delay(1200); 
+
     } catch (error) {
+       // --- ИЗМЕНЕНИЕ ---
+       // Улучшенная обработка ошибок API
+       if (error.response && error.response.status === 429) {
+           console.error(`Достигнут лимит запросов API. Попробуйте позже.`);
+           throw new Error(`Сервер CoinGecko временно ограничил количество запросов. Пожалуйста, повторите попытку через минуту.`);
+       }
        console.error(`Не удалось получить данные для ${id}:`, error.message);
        throw new Error(`Не удалось найти монету с ID "${id}". Проверьте правильность написания.`);
     }
@@ -81,10 +95,7 @@ function optimizePortfolio(returns) {
     const covInv = inv(covMatrix);
     const oneVec = ones([avgReturns.length, 1]);
     const top = multiply(covInv, oneVec);
-    const bottom = multiply(transpose(oneVec), top); // bottom здесь - это скаляр (число)
-    
-    // --- ИЗМЕНЕНИЕ ---
-    // Используем 'bottom' напрямую, так как это уже число, а не матрица.
+    const bottom = multiply(transpose(oneVec), top);
     const weights = squeeze(top).map(w => w / bottom);
     return weights;
   } catch(error) {
@@ -116,7 +127,7 @@ bot.on('message', async msg => {
   
   const coins = input.split(',');
 
-  bot.sendMessage(chatId, `⏳ Рассчитываю портфель для: ${coins.join(', ')}...`);
+  bot.sendMessage(chatId, `⏳ Загружаю данные и рассчитываю портфель для: ${coins.join(', ')}... Это может занять некоторое время.`);
 
   try {
     const prices = await fetchPrices(coins);
