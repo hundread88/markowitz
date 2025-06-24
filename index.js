@@ -1,7 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { mean, covariance, multiply, transpose, inv, ones, squeeze } from 'mathjs';
+import { mean, multiply, transpose, inv, ones, squeeze, subtract } from 'mathjs';
 
 dotenv.config();
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
@@ -28,9 +28,17 @@ function computeReturns(prices) {
   return returns;
 }
 
+function calculateCovarianceMatrix(data) {
+  const meanReturns = mean(data, 0);
+  const demeaned = data.map(row => subtract(row, meanReturns));
+  const n = data.length;
+  const matrix = multiply(transpose(demeaned), demeaned);
+  return matrix.map(row => row.map(value => value / (n - 1)));
+}
+
 function optimizePortfolio(returns) {
   const avgReturns = mean(returns, 0);
-  const covMatrix = covariance(returns);
+  const covMatrix = calculateCovarianceMatrix(returns);
   const covInv = inv(covMatrix);
   const oneVec = ones([avgReturns.length, 1]);
   const top = multiply(transpose(oneVec), covInv);
