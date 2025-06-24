@@ -1,0 +1,70 @@
+import TelegramBot from 'node-telegram-bot-api';
+import dotenv from 'dotenv';
+import axios from 'axios';
+import { mean, covariance, multiply, transpose, inv, ones, squeeze } from 'mathjs';
+
+dotenv.config();
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+
+async function fetchPrices(coinIds, days = 30) {
+  const prices = {};
+  for (let id of coinIds) {
+    const url = `https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=${days}`;
+    const { data } = await axios.get(url);
+    prices[id] = data.prices.map(p => p[1]);
+  }
+  return prices;
+}
+
+function computeReturns(prices) {
+  const returns = [];
+  const keys = Object.keys(prices);
+  for (let i = 1; i < prices[keys[0]].length; i++) {
+    const row = keys.map(k =>
+      Math.log(prices[k][i] / prices[k][i - 1])
+    );
+    returns.push(row);
+  }
+  return returns;
+}
+
+function optimizePortfolio(returns) {
+  const avgReturns = mean(returns, 0);
+  const covMatrix = covariance(returns);
+  const covInv = inv(covMatrix);
+  const oneVec = ones([avgReturns.length, 1]);
+  const top = multiply(transpose(oneVec), covInv);
+  const bottom = multiply(top, oneVec);
+  const weights = squeeze(multiply(covInv, oneVec))
+    .map(w => w / bottom._data[0][0]);
+  return weights;
+}
+
+function formatWeights(coinIds, weights) {
+  return coinIds.map((id, i) =>
+    `${id}: ${(weights[i] * 100).toFixed(2)}%`
+  ).join('\n');
+}
+
+bot.onText(/\/start/, msg => {
+  bot.sendMessage(msg.chat.id, `Привет! Отправь список монет через запятую (например: bitcoin,ethereum,solana)`);
+});
+
+bot.on('message', async msg => {
+  if (msg.text.startsWith('/')) return;
+  const chatId = msg.chat.id;
+  const input = msg.text.toLowerCase().replace(/\s/g, '');
+  const coins = input.split(',');
+
+  bot.sendMessage(chatId, `⏳ Загружаю данные для: ${coins.join(', ')}`);
+
+  try {
+    const prices = await fetchPrices(coins);
+    const returns = computeReturns(prices);
+    const weights = optimizePortfolio(returns);
+    const result = formatWeights(coins, weights);
+    bot.sendMessage(chatId, `📊 Оптимальное распределение (Мин. риск):\n\n${result}`);
+  } catch (err) {
+    bot.sendMessage(chatId, `Ошибка при расчёте: ${err.message}`);
+  }
+});
