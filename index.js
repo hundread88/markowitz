@@ -35,13 +35,22 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 минут для цен
 // --- Инициализация ---
 async function initializeCoinList() {
     try {
-        console.log("Загрузка списка монет с CoinGecko...");
-        const { data } = await coinGeckoApi.get('/coins/list');
-        coinListCache = data;
+        // --- ИЗМЕНЕНИЕ: Загружаем список рынков, отсортированный по капитализации ---
+        console.log("Загрузка списка рынков с CoinGecko (отсортировано по капитализации)...");
+        // Загружаем несколько страниц, чтобы получить более полный список
+        let allCoins = [];
+        for (let page = 1; page <= 5; page++) { // Загружаем 5 страниц = 1250 монет
+            const { data } = await coinGeckoApi.get('/coins/markets', {
+                params: { vs_currency: 'usd', order: 'market_cap_desc', per_page: 250, page: page }
+            });
+            allCoins = allCoins.concat(data);
+            await delay(500); // Небольшая задержка между запросами страниц
+        }
+        
+        coinListCache = allCoins;
         console.log(`Список монет успешно загружен. Всего: ${coinListCache.length} монет.`);
     } catch (error) {
         console.error("Критическая ошибка: не удалось загрузить список монет. Бот не сможет конвертировать тикеры в ID.", error.message);
-        // В реальном приложении можно добавить повторные попытки или аварийное завершение
     }
 }
 
@@ -53,15 +62,19 @@ function convertTickersToIds(tickers) {
 
     for (const ticker of tickers) {
         const lowerTicker = ticker.toLowerCase();
-        let bestMatch = null;
+        
+        // --- ИЗМЕНЕНИЕ: Улучшенная логика поиска ---
+        // Сначала ищем точное совпадение ID, что маловероятно, но возможно
+        let match = coinListCache.find(coin => coin.id === lowerTicker);
+        
+        // Если не нашли по ID, ищем по символу.
+        // Так как список отсортирован по капитализации, первое совпадение будет самым популярным.
+        if (!match) {
+            match = coinListCache.find(coin => coin.symbol === lowerTicker);
+        }
 
-        // Ищем совпадения
-        const potentialMatches = coinListCache.filter(coin => coin.id === lowerTicker || coin.symbol === lowerTicker);
-
-        if (potentialMatches.length > 0) {
-            // Приоритет: точное совпадение ID, затем точное совпадение символа, затем первый в списке
-            bestMatch = potentialMatches.find(c => c.id === lowerTicker) || potentialMatches[0];
-            foundIds.push(bestMatch.id);
+        if (match) {
+            foundIds.push(match.id);
         } else {
             notFound.push(ticker);
         }
@@ -93,7 +106,7 @@ async function fetchPrices(coinIds, days) {
     while (retries < maxRetries && !success) {
       try {
         const { data } = await coinGeckoApi.get(`/coins/${id}/market_chart?vs_currency=usd&days=${days}`);
-        if (!data.prices || data.prices.length < 2) { // Нужно хотя бы 2 точки для расчета доходности
+        if (!data.prices || data.prices.length < 2) {
           throw new Error(`Недостаточно данных о ценах для ${id} за период ${days} дней.`);
         }
         
@@ -108,7 +121,7 @@ async function fetchPrices(coinIds, days) {
           console.warn(`Достигнут лимит API для ${id}. Повторная попытка через ${waitTime / 1000}с...`);
           await delay(waitTime);
         } else {
-          throw new Error(error.message || `Не удалось найти монету с ID "${id}".`);
+          throw new Error(error.response?.data?.error || `Не удалось найти монету с ID "${id}".`);
         }
       }
     }
@@ -193,6 +206,11 @@ bot.onText(/\/start/, msg => {
 bot.on('message', async msg => {
     if (msg.text.startsWith('/')) return;
     const chatId = msg.chat.id;
+    
+    if (coinListCache.length === 0) {
+        return bot.sendMessage(chatId, "⏳ Бот инициализируется, список монет еще загружается. Пожалуйста, подождите минуту и попробуйте снова.");
+    }
+    
     const rawInput = msg.text.trim();
     
     // --- Парсинг ввода ---
@@ -202,15 +220,15 @@ bot.on('message', async msg => {
     const periodMatch = rawInput.match(/\/\s*(\d+)\s*$/);
     if (periodMatch) {
         const parsedDays = parseInt(periodMatch[1], 10);
-        if (!isNaN(parsedDays) && parsedDays >= 7 && parsedDays <= 365) {
+        if (!isNaN(parsedDays) && parsedDays >= 7 && parsedDays <= 2000) { // Увеличил макс. период
             days = parsedDays;
             tickersString = rawInput.replace(/\/\s*(\d+)\s*$/, '').trim();
         } else {
-            return bot.sendMessage(chatId, "❌ Ошибка: Период должен быть числом от 7 до 365 дней.");
+            return bot.sendMessage(chatId, "❌ Ошибка: Период должен быть числом от 7 до 2000 дней.");
         }
     }
     
-    const tickers = tickersString.split(',').map(t => t.trim()).filter(t => t);
+    const tickers = tickersString.split(',').map(t => t.trim().toLowerCase()).filter(t => t);
     if (tickers.length === 0) {
         return bot.sendMessage(chatId, "Пожалуйста, введите тикеры монет.");
     }
